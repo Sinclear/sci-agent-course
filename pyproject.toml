@@ -5,6 +5,9 @@ description = "Практикум по научному агенту: от ис�
 requires-python = ">=3.10"
 license = { text = "MIT" }
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.10"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
