@@ -14,7 +14,10 @@ test:
 	$(PY) -m pytest -q
 
 lessons:
-	@for f in examples/0*.py; do printf "%-32s" "$$f"; $(PY) "$$f" >/dev/null && echo OK || echo FAIL; done
+	@fail=0; for f in examples/0*.py; do \
+	  printf "%-32s" "$$f"; \
+	  if $(PY) "$$f" >/dev/null 2>&1; then echo OK; else echo FAIL; fail=1; fi; \
+	done; test $$fail -eq 0 || (echo "есть упавшие уроки"; exit 1)
 
 evals:
 	$(PY) -m evals.run_evals

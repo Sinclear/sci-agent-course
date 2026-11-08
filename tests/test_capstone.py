@@ -46,3 +46,34 @@ def test_control_is_rejected_by_checker() -> None:
     claim = Claim(text="мощность", source="s.txt", quote="Мощность 88 Вт при 12 токенах/с.")
     assert find_quote(claim.quote, TEXT).found is True
     assert find_quote(negative_control(claim).quote, TEXT).found is False
+
+
+def test_missing_folder_exits_2(tmp_path, monkeypatch) -> None:
+    """Нет папки — понятное сообщение и код 2, а не traceback."""
+    monkeypatch.setattr(sys, "argv", ["mini_review.py", "--sources", str(tmp_path / "nope")])
+    from capstone.mini_review import main
+
+    assert main() == 2
+
+
+def test_folder_without_text_exits_2(tmp_path, monkeypatch) -> None:
+    """Папка есть, читаемого текста нет — тоже 2, без пустого отчёта."""
+    (tmp_path / "notes.bin").write_bytes(b"\x00\x01")
+    monkeypatch.setattr(sys, "argv", ["mini_review.py", "--sources", str(tmp_path)])
+    from capstone.mini_review import main
+
+    assert main() == 2
+
+
+def test_offline_report_is_written(tmp_path, monkeypatch) -> None:
+    """Офлайн-режим на реальном источнике: отчёт создаётся и содержит метрики."""
+    out = tmp_path / "review.md"
+    sources = ROOT / "examples/sources"
+    monkeypatch.setattr(sys, "argv", ["mini_review.py", "--sources", str(sources), "--out", str(out)])
+    from capstone.mini_review import main
+
+    assert main() == 0
+    text = out.read_text(encoding="utf-8")
+    assert "## Проверенные утверждения" in text
+    assert "## Метрики" in text
+    assert "контроль: подмена чисел" in text

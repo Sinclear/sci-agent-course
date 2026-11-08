@@ -51,14 +51,27 @@ def read_sources(folder: Path) -> list[Evidence]:
         if suffix in {".txt", ".md"}:
             out.append(Evidence(path.name, path.read_text(encoding="utf-8")))
         elif suffix == ".pdf":
-            out.append(Evidence(path.name, _pdf_text(path)))
+            text = _pdf_text(path)
+            if text is None:
+                continue
+            if not text.strip():
+                print(f"  ! {path.name}: текст не извлечён, файл пропущен", file=sys.stderr)
+                continue
+            out.append(Evidence(path.name, text))
+        else:
+            print(f"  · {path.name}: не .txt/.md/.pdf, пропущен", file=sys.stderr)
     return out
 
 
-def _pdf_text(path: Path) -> str:
+def _pdf_text(path: Path) -> str | None:
+    """Текст PDF или None, если файл не читается (сообщение уже напечатано).
+
+    Пустая строка отличается от None: сканированный PDF без текстового слоя
+    — это не ошибка, а повод взять OCR (см. скилл document-analysis).
+    """
     if not shutil.which("pdftotext"):
-        print(f"  ! {path.name}: нет pdftotext, файл пропущен", file=sys.stderr)
-        return ""
+        print(f"  ! {path.name}: нет pdftotext — файл пропущен", file=sys.stderr)
+        return None
     result = subprocess.run(
         ["pdftotext", "-layout", "-enc", "UTF-8", str(path), "-"],
         capture_output=True,
@@ -66,8 +79,9 @@ def _pdf_text(path: Path) -> str:
         check=False,
     )
     if result.returncode != 0:
-        print(f"  ! {path.name}: {result.stderr.strip()[:120]}", file=sys.stderr)
-        return ""
+        reason = (result.stderr.strip().splitlines() or ["pdftotext вернул ошибку"])[-1]
+        print(f"  ! {path.name}: {reason[:120]} — файл пропущен", file=sys.stderr)
+        return None
     return result.stdout
 
 
@@ -180,16 +194,30 @@ def main() -> int:
     args = parser.parse_args()
 
     folder = Path(args.sources).expanduser()
-    evidence = read_sources(folder)
+    if not folder.is_dir():
+        print(f"папки нет: {folder}\nукажите --sources <папка с .txt/.md/.pdf>", file=sys.stderr)
+        return 2
+    evidence = [item for item in read_sources(folder) if item.text.strip()]
     if not evidence:
-        print(f"в {folder} нет .txt/.md/.pdf", file=sys.stderr)
+        print(
+            f"в {folder} нет читаемого текста (.txt/.md/.pdf с извлекаемым содержимым)",
+            file=sys.stderr,
+        )
         return 2
     print(f"источников: {len(evidence)}: {', '.join(e.name for e in evidence)}")
 
     client = Client() if args.live else None
     claims: list[Claim] = []
     for item in evidence:
-        proposed = live_claims(client, item, args.topic) if client else heuristic_claims(item)
+        try:
+            proposed = live_claims(client, item, args.topic) if client else heuristic_claims(item)
+        except OSError as exc:  # URLError — подкласс OSError: нет ключа, сети или сервера
+            print(
+                f"модель недоступна: {exc}\n"
+                "Проверьте ключ и сеть либо запустите без --live (офлайн-эвристика).",
+                file=sys.stderr,
+            )
+            return 3
         for claim in proposed:
             if not claim.locator:
                 claim.locator = locator_for(item.text, claim.quote)
