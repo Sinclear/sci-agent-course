@@ -177,3 +177,29 @@ def test_fonts_have_no_theme_override(built):
         for attr in theme_attrs:
             assert rfonts.get(qn(attr)) is None, f"{name}: остался {attr}"
         assert rfonts.get(qn("w:ascii")) == "Times New Roman", name
+
+
+def test_document_language_is_russian(built):
+    """Язык проверки орфографии: с en-US из шаблона Word подчёркивает весь текст."""
+    from docx.oxml.ns import qn
+
+    document = docx.Document(str(built))
+    styles_el = document.styles.element
+
+    rpr_default = styles_el.find(qn("w:docDefaults") + "/" + qn("w:rPrDefault"))
+    lang = rpr_default.find(qn("w:rPr")).find(qn("w:lang"))
+    assert lang.get(qn("w:val")) == "ru-RU"
+    assert lang.get(qn("w:eastAsia")) == "ru-RU"
+
+    for name in ("Normal", "Heading 1", "Heading 2"):
+        style_lang = document.styles[name].element.rPr.find(qn("w:lang"))
+        assert style_lang is not None, f"{name}: язык не задан"
+        assert style_lang.get(qn("w:val")) == "ru-RU", name
+
+    xml = styles_el.xml
+    assert "en-US" not in xml, "в стилях остался английский язык"
+
+    theme_lang = document.settings.element.find(qn("w:themeFontLang"))
+    assert theme_lang is not None, "язык шрифтов темы не задан"
+    assert theme_lang.get(qn("w:val")) == "ru-RU"
+    assert "en-US" not in document.settings.element.xml, "английский в settings.xml"

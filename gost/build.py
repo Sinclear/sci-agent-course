@@ -80,6 +80,52 @@ def _page_field(paragraph) -> None:
         run._r.append(node)
 
 
+def _set_language(doc, lang: str = "ru-RU") -> None:
+    """Язык проверки орфографии: иначе Word подчёркивает весь русский текст.
+
+    Язык живёт в w:lang документа (docDefaults) и в стилях шаблона, который
+    python-docx берёт по умолчанию: там en-US, поэтому русский текст помечается
+    как ошибочный. Достаточно задать его в умолчаниях и у используемых стилей.
+    """
+    styles_el = doc.styles.element
+    rpr_default = styles_el.find(qn("w:docDefaults") + "/" + qn("w:rPrDefault"))
+    if rpr_default is not None:
+        rpr = rpr_default.find(qn("w:rPr"))
+        if rpr is None:
+            rpr = OxmlElement("w:rPr")
+            rpr_default.append(rpr)
+    else:
+        rpr = OxmlElement("w:rPr")
+
+    def apply(rpr_element) -> None:
+        node = rpr_element.find(qn("w:lang"))
+        if node is None:
+            node = OxmlElement("w:lang")
+            rpr_element.append(node)
+        node.set(qn("w:val"), lang)
+        node.set(qn("w:eastAsia"), lang)
+        node.set(qn("w:bidi"), lang)
+
+    apply(rpr)
+    for style in doc.styles:
+        try:
+            apply(style.element.get_or_add_rPr())
+        except AttributeError:
+            continue
+
+    # язык шрифтов темы: Word подсказывает его как язык проверки для нового текста
+    try:
+        settings = doc.settings.element
+    except AttributeError:
+        return
+    theme_lang = settings.find(qn("w:themeFontLang"))
+    if theme_lang is None:
+        theme_lang = OxmlElement("w:themeFontLang")
+        settings.append(theme_lang)
+    theme_lang.set(qn("w:val"), lang)
+    theme_lang.set(qn("w:eastAsia"), lang)
+
+
 def _base_styles(doc) -> None:
     normal = doc.styles["Normal"]
     _set_fonts(normal, FONT)
@@ -105,6 +151,9 @@ def _base_styles(doc) -> None:
         pfmt.line_spacing = LINE
         pfmt.keep_with_next = True
         pfmt.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    # язык проверки — после шрифтов: стили должны уже иметь rPr
+    _set_language(doc)
 
 
 def _page_setup(doc) -> None:
@@ -237,6 +286,28 @@ def _body(doc, lines: list[str]) -> None:
     flush_table()
 
 
+def _localize_package(path: Path, lang: str = "ru-RU") -> None:
+    """Заменить язык во всех XML-частях пакета: в stylesWithEffects.xml остаётся en-US.
+
+    python-docx не трогает эту часть, а Word читает из неё настройки проверки для
+    части стилей, поэтому правки только в styles.xml недостаточно.
+    """
+    import shutil
+    import zipfile
+
+    tmp = path.with_suffix(".tmp")
+    with zipfile.ZipFile(path) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename.endswith(".xml") or item.filename.endswith(".rels"):
+                text = data.decode("utf-8", errors="replace")
+                for stale in ('w:val="en-US"', 'w:eastAsia="en-US"', 'w:val="ja-JP"'):
+                    text = text.replace(stale, stale.replace("en-US", lang).replace("ja-JP", lang))
+                data = text.encode("utf-8")
+            dst.writestr(item, data)
+    shutil.move(tmp, path)
+
+
 def build_markdown(source: str | Path, target: str | Path) -> Path:
     """Собрать docx из markdown-файла. Возвращает путь к результату."""
     text = Path(source).read_text(encoding="utf-8")
@@ -251,6 +322,7 @@ def build_markdown(source: str | Path, target: str | Path) -> Path:
     out = Path(target)
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(out))
+    _localize_package(out)
     return out
 
 
