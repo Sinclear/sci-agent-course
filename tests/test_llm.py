@@ -171,17 +171,21 @@ def test_cyrillic_token_estimate_is_above_naive():
 
 def test_usage_price_known_flag() -> None:
     """Модель вне PRICES: cost=0, но priced=False — иначе «$0.0000» врёт."""
-    events = [
+    events: list[dict[str, object]] = [
         {"choices": [{"delta": {"content": "ok"}}]},
         {"choices": [{"delta": {}, "finish_reason": "stop"}]},
         {"usage": {"prompt_tokens": 1000, "completion_tokens": 100}},
     ]
 
-    known = Client(provider="openai", model="gpt-5", api_key="k", transport=transport(events)).chat([{"role": "user", "content": "hi"}])
+    known = Client(provider="openai", model="gpt-5", api_key="k", transport=transport(events)).chat(
+        [{"role": "user", "content": "hi"}]
+    )
     assert known.usage.priced is True
     assert known.usage.cost > 0
 
-    unknown = Client(provider="openai", model="gemma4:31b", api_key="k", transport=transport(events)).chat([{"role": "user", "content": "hi"}])
+    unknown = Client(provider="openai", model="gemma4:31b", api_key="k", transport=transport(events)).chat(
+        [{"role": "user", "content": "hi"}]
+    )
     assert unknown.usage.cost == 0.0
     assert unknown.usage.priced is False
 

@@ -183,6 +183,13 @@ def negative_control(claim: Claim) -> Claim:
     )
 
 
+def _money(usage) -> str:
+    """Деньги или честное «неизвестно»: 0.0000 не должно выглядеть как бесплатно."""
+    if not usage.priced:
+        return f"${usage.cost:.4f} (цены модели нет в таблице — счёт может быть любым)"
+    return f"${usage.cost:.4f}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     default_sources = Path(__file__).resolve().parents[1] / "examples/sources"
