@@ -70,7 +70,12 @@ def rule_summarizer(messages: list[dict[str, Any]], keep_last: int = 4) -> list[
     """
     if len(messages) <= keep_last + 1:
         return messages
-    head, middle, tail = messages[:1], messages[1:-keep_last], messages[-keep_last:]
+    split = len(messages) - keep_last
+    # пары tool-call/tool-result не разрываем: если хвост начинается с
+    # результата инструмента, забираем и сообщение ассистента с вызовом
+    while split > 1 and messages[split].get("role") == "tool":
+        split -= 1
+    head, middle, tail = messages[:1], messages[1:split], messages[split:]
     lines: list[str] = []
     for msg in middle:
         role = msg.get("role")

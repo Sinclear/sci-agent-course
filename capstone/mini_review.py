@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sci_harness.llm import Client  # noqa: E402
-from sci_harness.provenance import Claim, find_quote  # noqa: E402
+from sci_harness.provenance import Claim, find_quote, locator_for  # noqa: E402
 
 SKILL = Path.home() / ".pi/agent/skills/gost-lab-report"
 VENV_PY = Path.home() / ".local/share/gost-docx-venv/bin/python"
@@ -83,22 +83,6 @@ def _pdf_text(path: Path) -> str | None:
         print(f"  ! {path.name}: {reason[:120]} — файл пропущен", file=sys.stderr)
         return None
     return result.stdout
-
-
-def locator_for(text: str, quote: str) -> str:
-    """Локатор из смещения: в PDF-тексте это страница, в txt — номер строки.
-
-    Проще, чем просить локатор у модели, и надёжнее: модель нумерует
-    страницы по ощущению, а здесь номер вычислен из самого файла.
-    """
-    index = text.find(quote)
-    if index < 0:  # цитату переносили между строками — ищем по началу
-        index = text.find(quote[:40])
-    if index < 0:
-        return ""
-    if "\f" in text:
-        return f"с. {text[:index].count(chr(12)) + 1}"
-    return f"строка {text[:index].count(chr(10)) + 1}"
 
 
 def heuristic_claims(evidence: Evidence, limit: int = 6) -> list[Claim]:
@@ -214,7 +198,8 @@ def main() -> int:
     print(f"источников: {len(evidence)}: {', '.join(e.name for e in evidence)}")
 
     client = Client() if args.live else None
-    claims: list[Claim] = []
+    proposals: list[Claim] = []
+    controls: list[Claim] = []
     for item in evidence:
         try:
             proposed = live_claims(client, item, args.topic) if client else heuristic_claims(item)
@@ -230,22 +215,28 @@ def main() -> int:
                 claim.locator = locator_for(item.text, claim.quote)
             match = find_quote(claim.quote, item.text)
             claim.verified, claim.score = match.found, match.score
-            claims.append(claim)
+            proposals.append(claim)
         # контроль: та же цитата с подменённым числом обязана быть отвергнута
         for claim in list(proposed):
             control = negative_control(claim)
             match = find_quote(control.quote, item.text)
             control.verified, control.score = match.found, match.score
-            claims.append(control)
+            controls.append(control)
 
-    verified = [c for c in claims if c.verified]
-    rejected = [c for c in claims if not c.verified]
-    shared = round(len(rejected) / len(claims), 3) if claims else 0.0
+    # ВАЖНО: предложенные утверждения и контрольные копии считаются раздельно.
+    # Валить их в одно число — значит выдать синтетические контроли за выдумки
+    # модели и завысить «долю отклонённых» вдвое.
+    verified = [c for c in proposals if c.verified]
+    rejected = [c for c in proposals if not c.verified]
+    caught = [c for c in controls if not c.verified]
+    slipped = [c for c in controls if c.verified]
+    recall = round(len(verified) / len(proposals), 3) if proposals else 0.0
 
     lines = [
         f"# {args.topic}",
         "",
-        f"Источников: {len(evidence)}. Утверждений предложено: {len(claims)}.",
+        f"Источников: {len(evidence)}. Утверждений предложено: {len(proposals)}. "
+        f"Контрольных копий (подмена чисел): {len(controls)}.",
         "",
         "## Проверенные утверждения",
         "",
@@ -262,15 +253,23 @@ def main() -> int:
             lines.append(f"- {claim.text} — источник {claim.source}, совпадение {claim.score:.2f}")
     else:
         lines.append("- нет")
+    lines += ["", "## Контрольные подмены", ""]
+    if controls:
+        for claim in controls:
+            verdict = "ПРОПУЩЕН — детектор не работает" if claim.verified else "пойман"
+            lines.append(f"- {claim.text} — {verdict}")
+    else:
+        lines.append("- нет")
     lines += [
         "",
         "## Метрики",
         "",
-        f"- утверждений: {len(claims)}",
+        f"- утверждений предложено: {len(proposals)}",
         f"- подтверждено: {len(verified)}",
-        f"- отклонено: {len(rejected)} ({shared:.1%})",
-        "- отклонённые — это в первую очередь контрольные подмены чисел:",
-        "  детектор обязан их ловить, иначе он подтвердит что угодно.",
+        f"- отклонено: {len(rejected)} (recall {recall:.1%})",
+        f"- контрольных подмен: {len(controls)}, поймано: {len(caught)}, пропущено: {len(slipped)}",
+        "- контрольные копии — синтетические, они не входят в число предложенных:",
+        "  смешивать их нельзя, иначе «доля отклонённых» завышается на глазах.",
         "",
         "## Как читать",
         "",
@@ -298,11 +297,14 @@ def main() -> int:
 
     out = Path(args.out)
     out.write_text("\n".join(lines), encoding="utf-8")
-    print(f"отчёт: {out} ({len(verified)} подтверждено, {len(rejected)} отклонено)")
+    print(
+        f"отчёт: {out} ({len(verified)} подтверждено из {len(proposals)} предложенных, "
+        f"{len(rejected)} отклонено; контролей {len(controls)}, поймано {len(caught)})"
+    )
 
     if args.docx:
         if not (SKILL.exists() and VENV_PY.exists() and shutil.which("pandoc")):
-            print("docx пропущен: нет скилла/venv/pandoc — см. docs/05-приёмка-гост.md")
+            print("docx пропущен: нет скилла/venv/pandoc — см. docs/04-приёмка-гост.md")
             return 0
         docx = out.with_suffix(".docx")
         build = subprocess.run(

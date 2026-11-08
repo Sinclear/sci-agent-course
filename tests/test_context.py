@@ -55,6 +55,30 @@ def test_lost_facts_finds_ids_gone_after_compaction():
     assert lost_facts(["abc123"], compacted) == ["abc123"]
 
 
+def test_summarizer_does_not_split_tool_pairs():
+    """Хвост не начинается с результата инструмента: пара не разрывается."""
+    messages = [
+        {"role": "system", "content": "s"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "результат"},
+        {"role": "assistant", "content": "записал"},
+        {"role": "user", "content": "дальше"},
+    ]
+    for keep_last in (1, 2):
+        compacted = rule_summarizer(messages, keep_last=keep_last)
+        for i, msg in enumerate(compacted):
+            if msg.get("role") == "tool":
+                assert any(
+                    m.get("role") == "assistant" and m.get("tool_calls") for m in compacted[:i]
+                ), f"пара разорвана при keep_last={keep_last}"
+
+
 def test_pinned_claims_only_verified_and_compact(tmp_path):
     journal = Journal(tmp_path / "claims.jsonl")
     journal.add(Claim(text="6 Вт в простое", source="tab2.txt", locator="таблица 2", verified=True))

@@ -69,6 +69,23 @@ def numbers(text: str) -> list[str]:
     return _NUM.findall(normalize(text))
 
 
+def locator_for(text: str, quote: str) -> str:
+    """Локатор из смещения: в PDF-тексте это страница, в txt — номер строки.
+
+    Локатор считается из файла, а не спрашивается у модели: модель нумерует
+    страницы по ощущению, а здесь номер вычислен из самого текста.
+    Возвращает пустую строку, если цитаты в тексте нет.
+    """
+    index = text.find(quote)
+    if index < 0:  # цитату переносили между строками — ищем по началу
+        index = text.find(quote[:40])
+    if index < 0:
+        return ""
+    if "\f" in text:
+        return f"с. {text[:index].count(chr(12)) + 1}"
+    return f"строка {text[:index].count(chr(10)) + 1}"
+
+
 def find_quote(quote: str, source_text: str, threshold: float = 0.92) -> Match:
     """Есть ли цитата в тексте источника — с допуском на разметку PDF.
 
@@ -103,7 +120,8 @@ def find_quote(quote: str, source_text: str, threshold: float = 0.92) -> Match:
             best_score, best_start = ratio, start
     snippet = haystack[max(best_start - 20, 0) : best_start + window + 20]
 
-    if numbers(needle) != numbers(haystack[best_start : best_start + window]):
+    quote_numbers = numbers(needle)
+    if quote_numbers and quote_numbers != numbers(haystack[best_start : best_start + window]):
         return Match(
             found=False,
             score=round(best_score, 3),

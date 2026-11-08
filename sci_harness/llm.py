@@ -337,9 +337,8 @@ class Client:
                     reply.finish_reason = delta["stop_reason"]
                 if usage := event.get("usage"):
                     reply.usage.output_tokens = usage.get("output_tokens", 0)
-            elif kind == "message_start":
-                if usage := (event.get("message") or {}).get("usage"):
-                    reply.usage.input_tokens = usage.get("input_tokens", 0)
+            elif kind == "message_start" and (usage := (event.get("message") or {}).get("usage")):
+                reply.usage.input_tokens = usage.get("input_tokens", 0)
         self._finish_calls(reply, partial)
         self._price(reply)
         return reply

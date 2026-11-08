@@ -5,14 +5,15 @@
 Внешние пакеты появляются только на шаге сборки документа.
 """
 
-from .context import Budget, ContextOverflow, pinned_claims, rule_summarizer
+from .context import Budget, BudgetExceeded, ContextOverflow, lost_facts, pinned_claims, rule_summarizer
 from .llm import Client, Reply, ToolCall, Usage, estimate_tokens
 from .loop import Runner, RunResult, cite_tool, write_run
-from .provenance import Claim, Journal, find_quote
-from .tools import Tool, ToolError, Workspace, build_registry, specs
+from .provenance import Claim, Journal, find_quote, locator_for, numbers
+from .tools import Tool, ToolError, Workspace, build_registry, clip_result, specs
 
 __all__ = [
     "Budget",
+    "BudgetExceeded",
     "Claim",
     "Client",
     "ContextOverflow",
@@ -27,8 +28,12 @@ __all__ = [
     "Workspace",
     "build_registry",
     "cite_tool",
+    "clip_result",
     "estimate_tokens",
     "find_quote",
+    "locator_for",
+    "lost_facts",
+    "numbers",
     "pinned_claims",
     "rule_summarizer",
     "specs",

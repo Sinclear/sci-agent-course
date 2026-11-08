@@ -1,13 +1,14 @@
 """Инструменты: песочница, файлы, правка по образцу, реестр.
 
-Правила, которые здесь зашиты и разобраны в docs/02-механика.md:
+Правила, которые здесь зашиты и разобраны в docs/02-источники-mcp.md:
 
 1. Описание инструмента — это промпт. Модель выбирает инструмент по
    описанию, поэтому «читает файл» хуже, чем «читает файл построчно;
    если файл больше 2000 строк — сначала список заголовков».
 2. Каждый инструмент живёт в песочнице `root` и не выходит за неё.
-3. Результат инструмента ограничен по размеру — иначе контекст
-   умирает на третьем шаге (полный текст сохраняется в файл).
+3. Результат инструмента обрезается по размеру (`clip_result`): края остаются,
+   середина при заданном spill-файле сохраняется на диск. Без обрезки контекст
+   умирает на третьем шаге.
 4. Правка файла — по образцу, а не перезаписью целиком: модель,
    переписывающая файл на 500 строк, гарантированно что-то теряет.
 """
@@ -25,6 +26,26 @@ from typing import Any
 
 MAX_RESULT_CHARS = 20_000
 DEFAULT_READ_LINES = 400
+
+
+def clip_result(text: str, keep_chars: int = MAX_RESULT_CHARS, spill: Path | None = None) -> str:
+    """Обрезать середину результата инструмента, сохранив края.
+
+    Середина, а не хвост: модель должна видеть и начало, и итог. Вырезанное
+    не выбрасывается молча — при заданном `spill` полный текст пишется в файл,
+    и сообщение называет путь. Без файла сообщение об этом не врёт.
+    """
+    if len(text) <= keep_chars:
+        return text
+    half = keep_chars // 2
+    dropped = len(text) - keep_chars
+    where = ""
+    if spill is not None:
+        spill = Path(spill)
+        spill.parent.mkdir(parents=True, exist_ok=True)
+        spill.write_text(text, encoding="utf-8")
+        where = f"; полный вывод сохранён в {spill}"
+    return f"{text[:half]}\n\n[... вырезано {dropped} символов{where} ...]\n\n{text[-half:]}"
 
 
 class ToolError(RuntimeError):
@@ -113,15 +134,9 @@ class Workspace:
             or "(пусто)"
         )
 
-    def truncate(self, text: str, keep_chars: int = MAX_RESULT_CHARS) -> str:
-        """Обрезаем середину, а не хвост: модель должна видеть и итог."""
-        if len(text) <= keep_chars:
-            return text
-        half = keep_chars // 2
-        return (
-            f"{text[:half]}\n\n[... вырезано {len(text) - keep_chars} символов; "
-            f"полный вывод сохранён в файле ...]\n\n{text[-half:]}"
-        )
+    def truncate(self, text: str, keep_chars: int = MAX_RESULT_CHARS, spill: Path | None = None) -> str:
+        """См. `clip_result`: края остаются, середина уходит в файл (если задан spill)."""
+        return clip_result(text, keep_chars, spill)
 
 
 def pdftotext_available() -> bool:

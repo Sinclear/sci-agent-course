@@ -127,6 +127,128 @@ def test_timeout_is_reported_to_model(journal):
     assert "таймаут" in tool_msg["content"]
 
 
+def test_timeout_does_not_block_the_step(journal):
+    """Таймаут = «перестаём ждать»: шаг возвращается, не дожидаясь потока."""
+    registry = {
+        "hang": Tool("hang", "d", {"type": "object", "properties": {}}, lambda: time.sleep(1.0) or "поздно"),
+    }
+    client = ScriptedClient([Reply(tool_calls=[call("hang", {}, "a")]), Reply(text="готово")])
+    started = time.monotonic()
+    result = Runner(client, registry, journal, tool_timeout=0.05).run("вопрос")
+    assert time.monotonic() - started < 0.5  # инструмент спит 1.0 с
+    assert result.answer == "готово"
+
+
+def test_oversized_result_is_clipped_and_spilled(journal, tmp_path):
+    big = "X" * 50_000
+    registry = {"flood": Tool("flood", "d", {"type": "object", "properties": {}}, lambda: big)}
+    client = ScriptedClient([Reply(tool_calls=[call("flood", {}, "a")]), Reply(text="готово")])
+    Runner(client, registry, journal, max_result_chars=1_000, spill_dir=tmp_path / "spill").run("вопрос")
+    tool_msg = [m for m in client.seen[1] if m["role"] == "tool"][0]["content"]
+    assert len(tool_msg) < 1_500
+    assert "вырезано" in tool_msg
+    spill = tmp_path / "spill" / "step-01-flood.txt"
+    assert spill.read_text(encoding="utf-8") == big  # полный вывод действительно сохранён
+    assert str(spill) in tool_msg
+
+
+def test_overflow_returns_result_instead_of_raising(journal):
+    from sci_harness.context import Budget
+
+    client = ScriptedClient([Reply(text="не дойдёт")])
+    runner = Runner(client, {}, journal, budget=Budget(window=500, reserve=100), compact=None)
+    result = runner.run("вопрос " * 2_000)
+    assert result.stopped == "context_overflow"
+    assert result.answer == ""
+
+
+def test_overflow_compacts_once_and_continues(journal):
+    from sci_harness.context import Budget, rule_summarizer
+
+    block = "X" * 3_000
+    registry = {
+        "big": Tool(
+            "big",
+            "d",
+            {"type": "object", "properties": {"i": {"type": "integer"}}},
+            lambda i: block,
+        )
+    }
+    client = ScriptedClient(
+        [
+            Reply(tool_calls=[call("big", {"i": 1}, "a")]),
+            Reply(tool_calls=[call("big", {"i": 2}, "b")]),
+            Reply(text="после сжатия"),
+        ]
+    )
+    runner = Runner(
+        client,
+        registry,
+        journal,
+        budget=Budget(window=1_500, reserve=100),
+        compact=lambda m: rule_summarizer(m, keep_last=2),
+    )
+    result = runner.run("вопрос")
+    assert result.stopped == "ответ"
+    assert result.answer == "после сжатия"
+    # пары tool-call/tool-result не разорваны: у каждого tool есть вызов выше
+    last = client.seen[-1]
+    for i, msg in enumerate(last):
+        if msg["role"] == "tool":
+            assert any(m.get("role") == "assistant" and m.get("tool_calls") for m in last[:i])
+
+
+def test_failed_call_is_not_memoized(journal):
+    """Таймаут не кэшируем: иначе модель не может повторить вызов."""
+    calls = {"n": 0}
+
+    def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            time.sleep(0.2)
+        return "ответ"
+
+    registry = {"flaky": Tool("flaky", "d", {"type": "object", "properties": {}}, flaky)}
+    client = ScriptedClient(
+        [
+            Reply(tool_calls=[call("flaky", {}, "a")]),
+            Reply(tool_calls=[call("flaky", {}, "b")]),
+            Reply(text="готово"),
+        ]
+    )
+    Runner(client, registry, journal, tool_timeout=0.05).run("вопрос")
+    second = [m for m in client.seen[2] if m.get("tool_call_id") == "b"][0]["content"]
+    assert "из кэша" not in second
+    assert calls["n"] == 2
+
+
+def test_cite_tool_computes_locator_from_file(journal):
+    """Локатор считается из файла, а не берётся у модели."""
+    sources = {"tab2.txt": "Введение\nТаблица 2\nВ простое процессор потребляет 6 Вт."}
+    registry = {"cite_check": cite_tool(journal, sources)}
+    client = ScriptedClient(
+        [
+            Reply(
+                tool_calls=[
+                    call(
+                        "cite_check",
+                        {
+                            "text": "6 Вт в простое",
+                            "source": "tab2.txt",
+                            "quote": "потребляет 6 Вт",
+                            "locator": "с. 7, табл. 9",
+                        },
+                        "a",
+                    )
+                ]
+            ),
+            Reply(text="готово"),
+        ]
+    )
+    Runner(client, registry, journal).run("проверь")
+    assert journal.claims()[0].locator == "строка 3"
+
+
 def test_unknown_tool_returns_error_not_crash(journal):
     client = ScriptedClient([Reply(tool_calls=[call("nope", {}, "a")]), Reply(text="готово")])
     Runner(client, {}, journal).run("вопрос")

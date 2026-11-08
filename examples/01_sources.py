@@ -34,8 +34,10 @@ for name in ("read_file", "pdf_extract", "table_extract"):
 banner("4. Обрезка результата: без неё контекст умирает на третьем шаге")
 long_text = "\n".join(f"строка {i}: {'данные ' * 20}" for i in range(400))
 print(f"исходный результат: {len(long_text)} символов")
-print(f"после обрезки: {registry['read_file'].fn} — обрезает не инструмент, а цикл;")
-print(f"а Workspace.truncate оставляет края: {len(ws.truncate(long_text, 500))} символов")
+clipped = ws.truncate(long_text, 500)
+print(f"после Workspace.truncate: {len(clipped)} символов — края на месте, середина вырезана")
+print("то же с сохранением полного вывода в файл — см. clip_result(spill=...) в sci_harness/tools.py")
+print("обрезает цикл: Runner(max_result_chars=..., spill_dir=...) в sci_harness/loop.py")
 
 banner("5. Источники, доступные для проверки цитат")
 sources = load_sources(HERE / "sources")

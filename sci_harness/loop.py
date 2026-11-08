@@ -5,10 +5,16 @@
 * Вызовы инструментов одного шага идут **параллельно** (3 поиска × 8 с
   вместо 24 с), но результаты кладутся в порядке `tool_calls` — модель
   опирается на порядок.
-* У каждого инструмента свой таймаут. Python не умеет убивать поток,
-  поэтому таймаут = «перестаём ждать», о чём честно сообщаем модели.
+* У каждого инструмента свой таймаут. Python не умеет убивать поток, поэтому
+  таймаут = «перестаём ждать»: шаг не блокируется, поток дорабатывает в фоне,
+  а модель получает честное сообщение вместо тишины.
+* Результат инструмента обрезается (края остаются), полный вывод — в файл.
+  Иначе один `pdf_extract` на 100 страниц съедает окно целиком.
+* Переполнение окна не роняет прогон: история один раз сжимается, а если
+  места всё равно нет — возвращается `RunResult(stopped="context_overflow")`.
 * Повторный вызов с теми же аргументами не выполняется второй раз:
-  агент с мемо не платит трижды за один и тот же запрос.
+  агент с мемо не платит трижды за один и тот же запрос. Неудачный вызов
+  (таймаут, ошибка) в мемо не попадает — иначе модель не смогла бы повторить.
 * Обрезанный ответ модели (`finish_reason=max_tokens`) не превращается
   в мусорный вызов — делается один повтор с увеличенным лимитом.
 """
@@ -24,10 +30,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from .context import Budget, pinned_claims
+from .context import Budget, BudgetExceeded, ContextOverflow, pinned_claims, rule_summarizer
 from .llm import Reply, ToolCall, Usage
-from .provenance import Claim, Journal, find_quote
-from .tools import Tool, ToolError, specs
+from .provenance import Claim, Journal, find_quote, locator_for
+from .tools import MAX_RESULT_CHARS, Tool, ToolError, clip_result, specs
 
 
 class ChatClient(Protocol):
@@ -82,6 +88,9 @@ class Runner:
         workers: int = 4,
         system: str = "",
         on_step: Callable[[Step], None] | None = None,
+        max_result_chars: int = MAX_RESULT_CHARS,
+        spill_dir: str | Path | None = None,
+        compact: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = rule_summarizer,
     ) -> None:
         self.client = client
         self.registry = registry
@@ -92,6 +101,9 @@ class Runner:
         self.workers = workers
         self.system = system
         self.on_step = on_step
+        self.max_result_chars = max_result_chars
+        self.spill_dir = spill_dir
+        self.compact = compact
         self._memo: dict[tuple[str, str], tuple[int, str]] = {}
 
     # --- основной цикл --------------------------------------------------
@@ -100,8 +112,21 @@ class Runner:
         messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
         steps: list[Step] = []
         stopped = "max_steps"
+        compacted = False
         for n in range(1, self.max_steps + 1):
-            self.budget.check(messages, self.client.usage.cost)
+            try:
+                self.budget.check(messages, self.client.usage.cost)
+            except ContextOverflow:
+                if compacted or self.compact is None:
+                    return self._result("", steps, "context_overflow")
+                messages = self.compact(messages)
+                compacted = True
+                try:
+                    self.budget.check(messages, self.client.usage.cost)
+                except ContextOverflow:
+                    return self._result("", steps, "context_overflow")
+            except BudgetExceeded:
+                return self._result("", steps, "budget")
             started = time.monotonic()
             reply = self._ask(messages, max_tokens)
             messages.append(reply.as_message())
@@ -168,8 +193,9 @@ class Runner:
                 continue
             todo.append((idx, call))
 
-        with ThreadPoolExecutor(max_workers=min(self.workers, max(len(todo), 1))) as pool:
-            futures = {idx: pool.submit(self._call_tool, call) for idx, call in todo}
+        pool = ThreadPoolExecutor(max_workers=min(self.workers, max(len(todo), 1)))
+        futures = {idx: pool.submit(self._call_tool, call) for idx, call in todo}
+        try:
             for idx, call in todo:
                 try:
                     result = futures[idx].result(timeout=self.tool_timeout)
@@ -183,11 +209,27 @@ class Runner:
                 except ToolError as exc:
                     result = f"ошибка инструмента: {exc}"
                     status = "error"
-                results[idx] = result
+                results[idx] = self._clip(result, step.n, call.name)
                 step.calls.append((call.name, call.args, status))
-                key = (call.name, json.dumps(call.args, sort_keys=True, ensure_ascii=False))
-                self._memo[key] = (step.n, result)
+                if status == "ok":  # неудачу не мемоизируем: модель должна уметь повторить
+                    key = (call.name, json.dumps(call.args, sort_keys=True, ensure_ascii=False))
+                    self._memo[key] = (step.n, results[idx])
+        finally:
+            # wait=False: шаг не ждёт поток, у которого уже истёк таймаут.
+            # Убить поток Python не умеет — он доработает в фоне, и это
+            # единственный честный вариант «перестать ждать».
+            pool.shutdown(wait=False)
         return results
+
+    def _clip(self, text: str, step: int, tool: str) -> str:
+        """Обрезка результата: края остаются модели, середина — в spill-файл."""
+        if len(text) <= self.max_result_chars:
+            return text
+        spill = None
+        if self.spill_dir is not None:
+            safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in tool)
+            spill = Path(self.spill_dir) / f"step-{step:02d}-{safe}.txt"
+        return clip_result(text, self.max_result_chars, spill)
 
     def _call_tool(self, call: ToolCall) -> str:
         tool = self.registry.get(call.name)
@@ -225,12 +267,24 @@ def cite_tool(journal: Journal, sources: dict[str, str]) -> Tool:
         if source not in sources:
             raise ToolError(f"неизвестный источник {source}. Доступны: {', '.join(sources)}")
         match = find_quote(quote, sources[source])
+        # локатор считаем из файла, а не берём у модели: она нумерует страницы
+        # по ощущению. Её вариант остаётся запасным — на случай, когда цитата
+        # не найдена и считать нечего.
+        computed = locator_for(sources[source], quote) if match.found else ""
         claim = Claim(
-            text=text, source=source, locator=locator, quote=quote, verified=match.found, score=match.score
+            text=text,
+            source=source,
+            locator=computed or locator,
+            quote=quote,
+            verified=match.found,
+            score=match.score,
         )
         journal.add(claim)
         if match.found:
-            return f"принято: id {claim.id}, совпадение {match.score:.2f} ({match.reason})"
+            return (
+                f"принято: id {claim.id}, совпадение {match.score:.2f} ({match.reason}), "
+                f"локатор: {claim.locator or '—'}"
+            )
         return (
             f"НЕ НАЙДЕНО (id {claim.id}, совпадение {match.score:.2f}, причина: {match.reason}). "
             f"Ближайший фрагмент источника: «{match.snippet[:200]}». "
@@ -240,14 +294,18 @@ def cite_tool(journal: Journal, sources: dict[str, str]) -> Tool:
     return Tool(
         name="cite_check",
         description="Записать утверждение с дословной цитатой и локатором. Инструмент сверяет "
-        "цитату с текстом источника. Без успешного cite_check утверждение считается непроверенным.",
+        "цитату с текстом источника и сам вычисляет локатор (страница/строка) из файла. "
+        "Без успешного cite_check утверждение считается непроверенным.",
         parameters={
             "type": "object",
             "properties": {
                 "text": {"type": "string", "description": "утверждение своими словами"},
                 "source": {"type": "string", "description": "файл или URL источника"},
                 "quote": {"type": "string", "description": "дословная цитата из источника"},
-                "locator": {"type": "string", "description": "страница/раздел/таблица"},
+                "locator": {
+                    "type": "string",
+                    "description": "необязательно: страница/раздел; локатор считается из файла",
+                },
             },
             "required": ["text", "source", "quote"],
         },
