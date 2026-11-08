@@ -10,7 +10,9 @@
    «предложение с числом» (базовая линия, с которой надо сравнивать модель).
 3. Проверяет каждое утверждение дословной цитатой по тексту источника.
 4. Пишет отчёт: подтверждённое, отклонённое, метрики.
-5. По флагу --docx собирает ГОСТ-документ скиллом gost-lab-report.
+5. По флагу --docx собирает ГОСТ-документ: внешним скиллом gost-lab-report,
+   если он есть, иначе встроенными gost/build.py + gost/check.py (6 проверок).
+   Код возврата 4 — приёмка оформления не прошла.
 
 Честное ограничение офлайн-режима: эвристика берёт предложение целиком,
 поэтому её цитаты подтверждаются по построению. Это проверка пайплайна,
@@ -240,6 +242,8 @@ def main() -> int:
         "",
         "## Проверенные утверждения",
         "",
+        "Таблица 1 — Проверенные утверждения",
+        "",
         "| id | утверждение | источник | локатор | совпадение |",
         "|---|---|---|---|---|",
     ]
@@ -303,25 +307,43 @@ def main() -> int:
     )
 
     if args.docx:
-        if not (SKILL.exists() and VENV_PY.exists() and shutil.which("pandoc")):
-            print("docx пропущен: нет скилла/venv/pandoc — см. docs/04-приёмка-гост.md")
-            return 0
         docx = out.with_suffix(".docx")
-        build = subprocess.run(
-            [str(VENV_PY), str(SKILL / "scripts/build.py"), str(out), str(docx)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        print(build.stdout[-300:] or build.stderr[-300:])
-        verify = subprocess.run(
-            [str(VENV_PY), str(SKILL / "scripts/verify.py"), str(docx)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        tail = verify.stdout.strip().splitlines()[-1] if verify.stdout.strip() else "нет вывода"
-        print(f"verify: {tail} (код {verify.returncode})")
+        skill_ready = SKILL.exists() and VENV_PY.exists() and shutil.which("pandoc")
+        if skill_ready:
+            build = subprocess.run(
+                [str(VENV_PY), str(SKILL / "scripts/build.py"), str(out), str(docx)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            print(build.stdout[-300:] or build.stderr[-300:])
+            verify = subprocess.run(
+                [str(VENV_PY), str(SKILL / "scripts/verify.py"), str(docx)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            tail = verify.stdout.strip().splitlines()[-1] if verify.stdout.strip() else "нет вывода"
+            print(f"verify: {tail} (код {verify.returncode})")
+            return 0 if verify.returncode == 0 else 4
+        try:
+            from gost.build import build_markdown
+            from gost.check import check_document
+        except ImportError as exc:  # нет python-docx — сборка невозможна
+            print(
+                f"docx пропущен: нет ни скилла, ни python-docx ({exc}) — "
+                "см. docs/04-приёмка-гост.md"
+            )
+            return 0
+        build_markdown(out, docx)
+        checks = check_document(docx)
+        failed = [c for c in checks if c.status == "FAIL"]
+        for i, check in enumerate(checks, 1):
+            print(check.line(i))
+        print(f"встроенная приёмка: {len(checks) - len(failed)}/{len(checks)} PASS — {docx}")
+        if failed:
+            print("что чинить: " + "; ".join(c.name for c in failed))
+            return 4
     return 0
 
 

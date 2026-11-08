@@ -5,18 +5,18 @@ PY ?= $(if $(VENV_PY),$(VENV_PY),python3)
 .PHONY: help setup test lessons evals capstone check docx clean
 
 help:
-	@echo "make setup     — создать .venv и поставить pytest, ruff, mypy"
+	@echo "make setup     — создать .venv и поставить pytest, ruff, mypy, python-docx"
 	@echo "make test      — тесты (pytest, без ключей и сети)"
 	@echo "make lessons   — прогнать все уроки 00…06"
 	@echo "make evals     — 15 кейсов, precision/recall"
 	@echo "make capstone  — обзор литературы из examples/sources"
-	@echo "make docx      — capstone + сборка ГОСТ-docx + verify"
+	@echo "make docx      — capstone + сборка ГОСТ-docx + приёмка (скилл или 6 проверок)"
 	@echo "make check     — ruff + mypy (+ pyright, если установлен)"
 
 setup:
 	python3 -m venv .venv
 	.venv/bin/pip install -q --upgrade pip
-	.venv/bin/pip install -q pytest ruff mypy
+	.venv/bin/pip install -q pytest ruff mypy python-docx
 	@echo "setup: готово — make test подхватит .venv"
 
 test:
@@ -39,7 +39,7 @@ docx:
 
 check:
 	$(PY) -m ruff check .
-	$(PY) -m mypy sci_harness capstone evals
+	$(PY) -m mypy sci_harness capstone evals gost
 	@if command -v pyright >/dev/null 2>&1; then pyright; else echo "pyright не установлен — шаг пропущен"; fi
 
 clean:  ## убрать артефакты прогонов и кеши
