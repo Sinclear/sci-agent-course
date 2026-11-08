@@ -1,5 +1,7 @@
 # Научный агент: практикум
 
+[![CI](https://github.com/Sinclear/sci-agent-course/actions/workflows/ci.yml/badge.svg)](https://github.com/Sinclear/sci-agent-course/actions/workflows/ci.yml)
+
 Курс для исследователей: как пользоваться агентом так, чтобы результат можно
 было защитить. Не «как написать харнес», а «как получить отчёт, где каждое
 число имеет источник».

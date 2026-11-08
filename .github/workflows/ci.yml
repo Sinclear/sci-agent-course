@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # нижняя граница — из requires-python в pyproject.toml
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      # ставим тем же способом, что описан в README: make setup создаёт .venv
+      - name: окружение
+        run: make setup
+
+      - name: тесты
+        run: make test
+
+      - name: уроки (без ключей и сети)
+        run: make lessons
+
+      - name: кейсы (precision/recall)
+        run: make evals
+
+      - name: сборка и приёмка docx
+        run: make docx
+
+  lint:
+    name: ruff и mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: окружение
+        run: make setup
+
+      - name: статические проверки
+        run: make check
