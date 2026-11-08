@@ -164,3 +164,16 @@ def test_paragraph_alignment_is_justified(built):
     """Сборка не только «проходит проверку», но и выравнивает по ширине."""
     document = docx.Document(str(built))
     assert document.styles["Normal"].paragraph_format.alignment == WD_ALIGN_PARAGRAPH.JUSTIFY
+
+
+def test_fonts_have_no_theme_override(built):
+    """Атрибуты темы перекрывают явный шрифт: заголовки уезжали в Calibri/Carlito."""
+    from docx.oxml.ns import qn
+
+    document = docx.Document(str(built))
+    theme_attrs = ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme")
+    for name in ("Normal", "Heading 1", "Heading 2"):
+        rfonts = document.styles[name].element.rPr.find(qn("w:rFonts"))
+        for attr in theme_attrs:
+            assert rfonts.get(qn(attr)) is None, f"{name}: остался {attr}"
+        assert rfonts.get(qn("w:ascii")) == "Times New Roman", name

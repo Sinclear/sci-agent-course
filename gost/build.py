@@ -55,6 +55,11 @@ def _set_fonts(style, name: str) -> None:
     if rfonts is None:
         rfonts = OxmlElement("w:rFonts")
         rpr.append(rfonts)
+    # тема перекрывает явный шрифт: Word берёт majorHAnsi и заголовки уезжают
+    # в Calibri (в LibreOffice — Carlito). Атрибуты темы надо снять.
+    for theme_attr in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+        if rfonts.get(qn(theme_attr)) is not None:
+            del rfonts.attrib[qn(theme_attr)]
     for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
         rfonts.set(qn(attr), name)
 
