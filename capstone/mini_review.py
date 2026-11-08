@@ -273,6 +273,22 @@ def main() -> int:
         "проверяемый черновик обзора».",
         "",
     ]
+    if client is not None:
+        usage = client.usage
+        lines += [
+            "## Трейс прогона",
+            "",
+            f"- модель: {client.provider}/{client.model}",
+            f"- запросов к модели: {client.calls}",
+            f"- токенов: {usage.input_tokens} вход + {usage.output_tokens} выход",
+            f"- стоимость: {_money(usage)}",
+            "",
+        ]
+        print(
+            f"трейс: {client.calls} запросов, "
+            f"{usage.input_tokens}+{usage.output_tokens} токенов, {_money(usage)}"
+        )
+
     out = Path(args.out)
     out.write_text("\n".join(lines), encoding="utf-8")
     print(f"отчёт: {out} ({len(verified)} подтверждено, {len(rejected)} отклонено)")

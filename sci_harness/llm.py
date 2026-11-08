@@ -49,11 +49,13 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     cost: float = 0.0
+    priced: bool = False  # модель есть в PRICES: иначе cost=0 значил бы «бесплатно»
 
     def add(self, other: Usage) -> None:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
         self.cost += other.cost
+        self.priced = self.priced or other.priced
 
 
 @dataclass
@@ -380,10 +382,13 @@ class Client:
             )
 
     def _price(self, reply: Reply) -> None:
+        """Стоимость по таблице PRICES; модель не в таблице — cost остаётся 0, priced=False."""
+        known = self.model in PRICES
         prompt, completion = PRICES.get(self.model, (0.0, 0.0))
         reply.usage.cost = (
             reply.usage.input_tokens / 1_000_000 * prompt + reply.usage.output_tokens / 1_000_000 * completion
         )
+        reply.usage.priced = known
 
 
 def _split_system(messages: list[dict[str, Any]], system: str | None) -> tuple[str, list[dict[str, Any]]]:

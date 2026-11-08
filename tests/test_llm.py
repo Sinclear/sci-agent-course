@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from sci_harness.llm import Client, LLMError, RateLimited, estimate_tokens, parse_args
+from sci_harness.llm import Client, LLMError, RateLimited, Usage, estimate_tokens, parse_args
 
 
 def sse(events: list[dict]) -> list[bytes]:
@@ -167,3 +167,28 @@ def test_cyrillic_token_estimate_is_above_naive():
     text = "Число ошибок снижается" * 10
     naive = len(text) // 4
     assert estimate_tokens(text) > naive * 1.5
+
+
+def test_usage_price_known_flag() -> None:
+    """Модель вне PRICES: cost=0, но priced=False — иначе «$0.0000» врёт."""
+    events = [
+        {"choices": [{"delta": {"content": "ok"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        {"usage": {"prompt_tokens": 1000, "completion_tokens": 100}},
+    ]
+
+    known = Client(provider="openai", model="gpt-5", api_key="k", transport=transport(events)).chat([{"role": "user", "content": "hi"}])
+    assert known.usage.priced is True
+    assert known.usage.cost > 0
+
+    unknown = Client(provider="openai", model="gemma4:31b", api_key="k", transport=transport(events)).chat([{"role": "user", "content": "hi"}])
+    assert unknown.usage.cost == 0.0
+    assert unknown.usage.priced is False
+
+
+def test_usage_add_keeps_priced() -> None:
+    total = Usage()
+    total.add(Usage(input_tokens=10, cost=0.5, priced=True))
+    total.add(Usage(input_tokens=5))
+    assert total.priced is True
+    assert total.input_tokens == 15
