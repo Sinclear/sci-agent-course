@@ -15,7 +15,7 @@
 ```python
 Case(id=4, quote="...", source="ivanov2024", expect_found=False,
      why="подмена числа: 88 Вт → 95 Вт")
-```python
+```
 
 Обязательно должны быть обе стороны:
 
