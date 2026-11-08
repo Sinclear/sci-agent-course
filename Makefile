@@ -30,3 +30,9 @@ docx:
 
 check:
 	check .
+
+clean:  ## убрать артефакты прогонов и кеши
+	rm -f review.md review.docx trace.jsonl
+	rm -rf .pytest_cache .ruff_cache .mypy_cache .sci
+	find . -name __pycache__ -type d -prune -exec rm -rf {} +
+	@echo "clean: готово"
